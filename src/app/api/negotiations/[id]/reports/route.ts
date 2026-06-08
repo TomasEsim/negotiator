@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { addReport, getNegotiation, getRules, updateNegotiation } from "@/lib/db";
-import { extractReportFromPdf, MissingApiKeyError } from "@/lib/anthropic";
+import { extractReportFromSource, MissingApiKeyError, type PdfSource } from "@/lib/anthropic";
 import { scoreReport } from "@/lib/scoring";
 import type { Platform, Report } from "@/lib/types";
 
@@ -32,6 +32,11 @@ async function cleanupBlobs(urls: string[]): Promise<void> {
   }
 }
 
+interface Job {
+  source: PdfSource;
+  filename: string;
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -46,12 +51,13 @@ export async function POST(
   const platformsSeen = new Set<Platform>(negotiation.platforms);
   const contentType = req.headers.get("content-type") || "";
 
-  // Collect (bytes, filename) from either Blob URLs (production) or multipart (local).
-  const incoming: { buf: Buffer; filename: string }[] = [];
+  const jobs: Job[] = [];
   const blobsToDelete: string[] = [];
   let forced: Platform | null = null;
 
   if (contentType.includes("application/json")) {
+    // Production: PDFs are already in Blob storage. Pass the URL straight to
+    // Claude so Anthropic fetches it directly — no download or base64 here.
     const body = await req.json().catch(() => ({}));
     forced = parsePlatformField(body.platform);
     const items = Array.isArray(body.items) ? body.items : [];
@@ -62,19 +68,11 @@ export async function POST(
         errors.push(`${filename}: missing upload URL`);
         continue;
       }
-      try {
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          errors.push(`${filename}: could not read the uploaded file`);
-          continue;
-        }
-        incoming.push({ buf: Buffer.from(await resp.arrayBuffer()), filename });
-        blobsToDelete.push(url);
-      } catch (e) {
-        errors.push(`${filename}: ${(e as Error).message}`);
-      }
+      jobs.push({ source: { kind: "url", url }, filename });
+      blobsToDelete.push(url);
     }
   } else {
+    // Local: file is in the multipart body; send it as base64.
     let form: FormData;
     try {
       form = await req.formData();
@@ -90,28 +88,27 @@ export async function POST(
         errors.push(`${file.name}: not a PDF`);
         continue;
       }
-      incoming.push({ buf: Buffer.from(await file.arrayBuffer()), filename: file.name });
+      const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+      jobs.push({ source: { kind: "base64", data: base64 }, filename: file.name });
     }
   }
 
-  if (incoming.length === 0) {
-    return Response.json(
-      { error: errors[0] || "No files uploaded", errors },
-      { status: errors.length ? 200 : 400 }
-    );
+  if (jobs.length === 0) {
+    return Response.json({ error: errors[0] || "No files uploaded", errors }, {
+      status: errors.length ? 200 : 400,
+    });
   }
 
-  for (const { buf, filename } of incoming) {
+  for (const job of jobs) {
     try {
-      const base64 = buf.toString("base64");
-      const hint = forced ?? platformFromName(filename);
-      const metrics = await extractReportFromPdf(base64, hint);
+      const hint = forced ?? platformFromName(job.filename);
+      const metrics = await extractReportFromSource(job.source, hint);
       const platform = metrics.platform ?? "unknown";
       const scores = scoreReport(metrics, rules);
       const report = await addReport({
         negotiationId: id,
         platform,
-        filename,
+        filename: job.filename,
         metrics,
         scores,
       });
@@ -122,7 +119,7 @@ export async function POST(
         await cleanupBlobs(blobsToDelete);
         return Response.json({ error: e.message }, { status: 400 });
       }
-      errors.push(`${filename}: ${(e as Error).message}`);
+      errors.push(`${job.filename}: ${(e as Error).message}`);
     }
   }
 

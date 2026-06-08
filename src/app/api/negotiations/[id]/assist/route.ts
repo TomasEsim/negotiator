@@ -32,10 +32,12 @@ export async function POST(
   }
 
   try {
-    const rules = await getRules();
-    const reports = await listReports(id);
-    const messages = await listMessages(id);
-    const pastDeals = await listPastDeals(id);
+    const [rules, reports, messages, pastDeals] = await Promise.all([
+      getRules(),
+      listReports(id),
+      listMessages(id),
+      listPastDeals(id),
+    ]);
     const recommendation = await runAssistant({
       negotiation,
       reports,

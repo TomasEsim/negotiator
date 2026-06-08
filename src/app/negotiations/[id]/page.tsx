@@ -10,8 +10,10 @@ export default async function NegotiationPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const detail = await getNegotiationDetail(id);
+  const [detail, rules] = await Promise.all([
+    getNegotiationDetail(id),
+    getRules(),
+  ]);
   if (!detail) notFound();
-  const rules = await getRules();
   return <Workspace initial={detail} rules={rules} />;
 }

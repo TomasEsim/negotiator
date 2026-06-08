@@ -168,8 +168,12 @@ const EXTRACTION_TOOL: Anthropic.Messages.Tool = {
   },
 };
 
-export async function extractReportFromPdf(
-  pdfBase64: string,
+export type PdfSource =
+  | { kind: "base64"; data: string }
+  | { kind: "url"; url: string };
+
+export async function extractReportFromSource(
+  src: PdfSource,
   platformHint?: Platform
 ): Promise<ReportMetrics> {
   const hint =
@@ -200,7 +204,10 @@ export async function extractReportFromPdf(
         content: [
           {
             type: "document",
-            source: { type: "base64", media_type: "application/pdf", data: pdfBase64 },
+            source:
+              src.kind === "url"
+                ? { type: "url", url: src.url }
+                : { type: "base64", media_type: "application/pdf", data: src.data },
           },
           { type: "text", text: `${hint}\n\nExtract all available metrics and call the tool.` },
         ],
@@ -212,6 +219,11 @@ export async function extractReportFromPdf(
   if (platformHint && platformHint !== "unknown") raw.platform = platformHint;
   if (!raw.platform) raw.platform = "unknown";
   return raw;
+}
+
+/** Convenience wrapper for base64 (local multipart) uploads. */
+export function extractReportFromPdf(pdfBase64: string, platformHint?: Platform) {
+  return extractReportFromSource({ kind: "base64", data: pdfBase64 }, platformHint);
 }
 
 // ── 2. Negotiation assistant ─────────────────────────────────────────────────
