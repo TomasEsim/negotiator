@@ -37,6 +37,15 @@ cd holafly-negotiator
 vercel            # follow the prompts (it will open your browser to log in)
 ```
 
+## 2b) Enable Blob storage (required for PDF uploads)
+
+Vercel functions can't receive uploads larger than 4.5 MB directly, and HypeAuditor
+PDFs are ~10–12 MB — so the app uploads them straight to **Vercel Blob**.
+
+In the Vercel project → **Storage → Create Database → Blob** → create the store and
+**connect it to this project**. Vercel automatically adds a `BLOB_READ_WRITE_TOKEN`
+environment variable (you don't need to copy it). Without this, PDF uploads will fail.
+
 ## 3) Set environment variables in Vercel
 
 Project → **Settings → Environment Variables** → add these for **Production**

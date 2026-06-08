@@ -77,17 +77,54 @@ export function Workspace({
     if (!files || files.length === 0) return;
     setUploading(true);
     setUploadErrors([]);
-    const fd = new FormData();
-    Array.from(files).forEach((f) => fd.append("files", f));
-    if (uploadPlatform !== "auto") fd.append("platform", uploadPlatform);
+    const fileArr = Array.from(files);
+    const platform = uploadPlatform !== "auto" ? uploadPlatform : undefined;
+    const errs: string[] = [];
     try {
-      const res = await fetch(`/api/negotiations/${id}/reports`, {
-        method: "POST",
-        body: fd,
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) setUploadErrors([j.error || "Upload failed."]);
-      else if (j.errors?.length) setUploadErrors(j.errors);
+      // Production (Vercel) uploads PDFs straight to Blob storage to bypass the
+      // 4.5 MB serverless body limit; locally we POST the file directly.
+      const cfg = await fetch("/api/config", { cache: "no-store" })
+        .then((r) => r.json())
+        .catch(() => ({ blob: false }));
+
+      if (cfg.blob) {
+        const { upload } = await import("@vercel/blob/client");
+        for (const file of fileArr) {
+          try {
+            const blob = await upload(file.name, file, {
+              access: "public",
+              handleUploadUrl: "/api/blob-upload",
+              contentType: "application/pdf",
+              multipart: true,
+            });
+            const res = await fetch(`/api/negotiations/${id}/reports`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                items: [{ url: blob.url, filename: file.name }],
+                platform,
+              }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (!res.ok) errs.push(j.error || `${file.name}: upload failed`);
+            else if (j.errors?.length) errs.push(...j.errors);
+          } catch (e) {
+            errs.push(`${file.name}: ${(e as Error).message}`);
+          }
+        }
+      } else {
+        const fd = new FormData();
+        fileArr.forEach((f) => fd.append("files", f));
+        if (platform) fd.append("platform", platform);
+        const res = await fetch(`/api/negotiations/${id}/reports`, {
+          method: "POST",
+          body: fd,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) errs.push(j.error || "Upload failed.");
+        else if (j.errors?.length) errs.push(...j.errors);
+      }
+      setUploadErrors(errs);
       await refresh();
     } catch (e) {
       setUploadErrors([(e as Error).message]);
